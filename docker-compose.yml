@@ -1,0 +1,16 @@
+services:
+  micro-notify:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: micro-notify
+    restart: unless-stopped
+    env_file:
+      - .env
+    ports:
+      - "3000:3000"
+    volumes:
+      - whatsapp-auth:/app/data/baileys-auth
+
+volumes:
+  whatsapp-auth:
