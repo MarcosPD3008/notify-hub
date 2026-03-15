@@ -5,11 +5,23 @@ import { BaseNotificationProvider } from './base-notification.provider';
 import { parseWhatsappSendDto } from '../dto/whatsapp-send.dto';
 import { ProviderStateService } from '../services/provider-state.service';
 
+interface ConnectionUpdate {
+  qr?: string;
+  connection?: string;
+  lastDisconnect?: {
+    error?: {
+      output?: {
+        statusCode?: number;
+      };
+    };
+  };
+}
+
 interface BaileysSocket {
   ev: {
     on(
       event: 'connection.update',
-      listener: (update: Record<string, unknown>) => void,
+      listener: (update: ConnectionUpdate) => void,
     ): void;
     on(event: 'creds.update', listener: () => void): void;
   };
@@ -31,9 +43,16 @@ export class WhatsappAdapter
   readonly providerName = 'whatsapp';
 
   private readonly logger = new Logger(WhatsappAdapter.name);
+  private readonly reconnectBaseDelayMs = Number(
+    process.env.WHATSAPP_RECONNECT_BASE_DELAY_MS ?? 5000,
+  );
+  private readonly reconnectMaxDelayMs = Number(
+    process.env.WHATSAPP_RECONNECT_MAX_DELAY_MS ?? 60000,
+  );
+
   private socket: BaileysSocket | null = null;
+  private reconnectAttempts = 0;
   private reconnectTimer: NodeJS.Timeout | null = null;
-  private isBootstrapping = false;
 
   constructor(private readonly providerState: ProviderStateService) {
     super();
@@ -73,116 +92,83 @@ export class WhatsappAdapter
   }
 
   private async bootstrapBaileys(): Promise<void> {
-    if (this.isBootstrapping) {
-      return;
-    }
-
-    this.isBootstrapping = true;
     const baileys = this.loadBaileys();
 
     if (!baileys) {
       this.logger.warn(
         'Dependency @whiskeysockets/baileys not available. /health will stay in WAITING_QR until dependency is installed.',
       );
-      this.isBootstrapping = false;
       return;
     }
 
-    try {
-      const authDir = this.resolveAuthDir();
-      await mkdir(authDir, { recursive: true });
+    const authDir = this.resolveAuthDir();
+    await mkdir(authDir, { recursive: true });
 
-      const { state, saveCreds } = await baileys.useMultiFileAuthState(authDir);
-      const socket = baileys.default({ auth: state, printQRInTerminal: false });
+    const { state, saveCreds } = await baileys.useMultiFileAuthState(authDir);
+    const socket = baileys.default({ auth: state, printQRInTerminal: false });
 
-      socket.ev.on('connection.update', (update) => {
-        const qr = typeof update.qr === 'string' ? update.qr : null;
-        const connection =
-          typeof update.connection === 'string' ? update.connection : '';
-        const statusCode = this.getDisconnectStatusCode(update);
+    socket.ev.on('connection.update', (update) => {
+      const qr = typeof update.qr === 'string' ? update.qr : null;
+      const connection =
+        typeof update.connection === 'string' ? update.connection : '';
 
-        if (qr) {
-          this.providerState.setQr(this.providerName, qr);
-          this.providerState.setConnectionStatus(this.providerName, 'WAITING_QR');
-        }
+      if (qr) {
+        this.providerState.setQr(this.providerName, qr);
+        this.providerState.setConnectionStatus(this.providerName, 'WAITING_QR');
+      }
 
-        if (connection === 'open') {
-          this.clearReconnectTimer();
-          this.providerState.setQr(this.providerName, null);
-          this.providerState.setConnectionStatus(this.providerName, 'CONNECTED');
-          this.logger.log('WhatsApp connected successfully.');
-        }
+      if (connection === 'open') {
+        this.reconnectAttempts = 0;
+        this.clearReconnectTimer();
+        this.providerState.setQr(this.providerName, null);
+        this.providerState.setConnectionStatus(this.providerName, 'CONNECTED');
+      }
 
-        if (connection === 'close') {
-          this.providerState.setConnectionStatus(this.providerName, 'WAITING_QR');
-          this.socket = null;
+      if (connection === 'close') {
+        this.socket = null;
+        this.providerState.setConnectionStatus(this.providerName, 'WAITING_QR');
+        this.scheduleReconnect(update);
+      }
+    });
 
-          if (statusCode === 401) {
-            this.logger.warn(
-              'WhatsApp session logged out (401). Delete auth files and pair again.',
-            );
-            return;
-          }
+    socket.ev.on('creds.update', () => {
+      void saveCreds();
+    });
 
-          this.logger.warn(
-            `WhatsApp connection closed${statusCode ? ` (code: ${statusCode})` : ''}. Retrying in 5s.`,
-          );
-          this.scheduleReconnect();
-        }
-      });
-
-      socket.ev.on('creds.update', () => {
-        void saveCreds();
-      });
-
-      this.socket = socket;
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      this.logger.error(`Failed to bootstrap WhatsApp adapter: ${message}`);
-      this.scheduleReconnect();
-    } finally {
-      this.isBootstrapping = false;
-    }
+    this.socket = socket;
   }
 
-  private scheduleReconnect(): void {
+  private scheduleReconnect(update: ConnectionUpdate): void {
     if (this.reconnectTimer) {
       return;
     }
 
+    const code = update.lastDisconnect?.error?.output?.statusCode;
+    const delay = this.getReconnectDelayMs();
+
+    this.logger.warn(
+      `WhatsApp connection closed${code ? ` (code: ${code})` : ''}. Retrying in ${delay}ms.`,
+    );
+
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null;
       void this.bootstrapBaileys();
-    }, 5000);
+    }, delay);
   }
 
   private clearReconnectTimer(): void {
-    if (!this.reconnectTimer) {
-      return;
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
     }
-
-    clearTimeout(this.reconnectTimer);
-    this.reconnectTimer = null;
   }
 
-  private getDisconnectStatusCode(update: Record<string, unknown>): number | null {
-    const lastDisconnect = update.lastDisconnect;
-    if (!lastDisconnect || typeof lastDisconnect !== 'object') {
-      return null;
-    }
+  private getReconnectDelayMs(): number {
+    const exponentialDelay =
+      this.reconnectBaseDelayMs * 2 ** this.reconnectAttempts;
+    this.reconnectAttempts += 1;
 
-    const error = (lastDisconnect as { error?: unknown }).error;
-    if (!error || typeof error !== 'object') {
-      return null;
-    }
-
-    const output = (error as { output?: unknown }).output;
-    if (!output || typeof output !== 'object') {
-      return null;
-    }
-
-    const statusCode = (output as { statusCode?: unknown }).statusCode;
-    return typeof statusCode === 'number' ? statusCode : null;
+    return Math.min(exponentialDelay, this.reconnectMaxDelayMs);
   }
 
   private resolveAuthDir(): string {
