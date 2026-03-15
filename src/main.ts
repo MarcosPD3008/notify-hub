@@ -4,12 +4,44 @@ import { AppModule } from './app.module';
 import { createOpenApiDocument } from './docs/openapi';
 import { ProviderStateService } from './notifications/services/provider-state.service';
 
+type SwaggerModuleType = {
+  setup: (
+    path: string,
+    app: unknown,
+    documentFactory: unknown,
+    options?: unknown,
+  ) => void;
+  createDocument: (app: unknown, config: unknown) => unknown;
+};
+
+type DocumentBuilderType = {
+  setTitle: (value: string) => DocumentBuilderType;
+  setDescription: (value: string) => DocumentBuilderType;
+  setVersion: (value: string) => DocumentBuilderType;
+  build: () => unknown;
+};
+
 function resolvePath(value: string | undefined, fallback: string): string {
   if (!value || value.trim().length === 0) {
     return fallback;
   }
 
   return value.startsWith('/') ? value : `/${value}`;
+}
+
+function loadNestSwagger(): {
+  SwaggerModule: SwaggerModuleType;
+  DocumentBuilder: new () => DocumentBuilderType;
+} | null {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    return require('@nestjs/swagger') as {
+      SwaggerModule: SwaggerModuleType;
+      DocumentBuilder: new () => DocumentBuilderType;
+    };
+  } catch {
+    return null;
+  }
 }
 
 async function bootstrap(): Promise<void> {
@@ -27,13 +59,33 @@ async function bootstrap(): Promise<void> {
 
   const providerState = app.get(ProviderStateService);
 
-  expressApp.get(openApiPath, (_req, res) => {
-    res.json(createOpenApiDocument(qrStreamPath));
-  });
+  const nestSwagger = loadNestSwagger();
+  if (nestSwagger) {
+    const swaggerConfig = new nestSwagger.DocumentBuilder()
+      .setTitle('MICRO.Notify API')
+      .setDescription(
+        'Microservicio de notificaciones con arquitectura Provider/Adapter.',
+      )
+      .setVersion('1.0.0')
+      .build();
+    const nestDoc = nestSwagger.SwaggerModule.createDocument(
+      app,
+      swaggerConfig,
+    );
 
-  expressApp.get(docsPath, (_req, res) => {
-    res.setHeader('Content-Type', 'text/html; charset=utf-8');
-    res.send(`<!doctype html>
+    expressApp.get(openApiPath, (_req, res) => {
+      res.json(nestDoc);
+    });
+
+    nestSwagger.SwaggerModule.setup(docsPath, app, nestDoc);
+  } else {
+    expressApp.get(openApiPath, (_req, res) => {
+      res.json(createOpenApiDocument(qrStreamPath));
+    });
+
+    expressApp.get(docsPath, (_req, res) => {
+      res.setHeader('Content-Type', 'text/html; charset=utf-8');
+      res.send(`<!doctype html>
 <html>
   <head>
     <meta charset="utf-8" />
@@ -51,7 +103,8 @@ async function bootstrap(): Promise<void> {
     </script>
   </body>
 </html>`);
-  });
+    });
+  }
 
   expressApp.get(qrStreamPath, (_req, res) => {
     res.setHeader('Content-Type', 'text/event-stream');
