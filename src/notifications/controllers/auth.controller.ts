@@ -8,7 +8,8 @@ export class AuthController {
   @Get('qr')
   @Header('Content-Type', 'text/html; charset=utf-8')
   getQr(@Query('format') format?: string): string {
-    const qr = this.providerState.getQr('whatsapp');
+    const snapshot = this.providerState.getSnapshot('whatsapp');
+    const qr = snapshot.qr;
 
     if (format === 'raw') {
       return qr ?? '';
@@ -19,8 +20,8 @@ export class AuthController {
   <head><meta charset="utf-8" /><title>MICRO.Notify QR</title></head>
   <body style="font-family: sans-serif; padding: 1rem;">
     <h1>WhatsApp Auth QR</h1>
-    <p>Status: ${qr ? 'WAITING_QR' : 'CONNECTED / NO_QR'}</p>
-    <pre style="white-space: pre-wrap; word-break: break-word;">${qr ?? 'No QR available. Device might already be connected.'}</pre>
+    <p>Status: ${snapshot.status}</p>
+    <pre style="white-space: pre-wrap; word-break: break-word;">${qr ?? 'No QR available yet. Keep this page open and refresh in a few seconds.'}</pre>
   </body>
 </html>`;
   }
