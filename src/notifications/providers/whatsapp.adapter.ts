@@ -1,10 +1,9 @@
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { mkdir } from 'node:fs/promises';
 import { performance } from 'node:perf_hooks';
-import { join } from 'node:path';
 import { BaseNotificationProvider } from './base-notification.provider';
-import { ProviderStateService } from '../services/provider-state.service';
 import { parseWhatsappSendDto } from '../dto/whatsapp-send.dto';
+import { ProviderStateService } from '../services/provider-state.service';
 
 interface BaileysSocket {
   ev: {
@@ -12,6 +11,7 @@ interface BaileysSocket {
       event: 'connection.update',
       listener: (update: Record<string, unknown>) => void,
     ): void;
+    on(event: 'creds.update', listener: () => void): void;
   };
   sendMessage(jid: string, content: { text: string }): Promise<unknown>;
 }
@@ -21,7 +21,6 @@ interface BaileysModule {
   useMultiFileAuthState: (
     authDir: string,
   ) => Promise<{ state: unknown; saveCreds: () => Promise<void> }>;
-  DisconnectReason?: Record<string, number>;
 }
 
 @Injectable()
@@ -53,10 +52,8 @@ export class WhatsappAdapter
 
     const startedAt = performance.now();
     for (const to of dto.to) {
-      const normalized = to.includes('@s.whatsapp.net')
-        ? to
-        : `${to}@s.whatsapp.net`;
-      await this.socket.sendMessage(normalized, { text: dto.message });
+      const jid = to.includes('@s.whatsapp.net') ? to : `${to}@s.whatsapp.net`;
+      await this.socket.sendMessage(jid, { text: dto.message });
     }
 
     this.providerState.setLatency(
@@ -83,9 +80,7 @@ export class WhatsappAdapter
       return;
     }
 
-    const authDir =
-      process.env.WHATSAPP_AUTH_DIR ??
-      join(process.cwd(), 'data', 'baileys-auth');
+    const authDir = this.resolveAuthDir();
     await mkdir(authDir, { recursive: true });
 
     const { state, saveCreds } = await baileys.useMultiFileAuthState(authDir);
@@ -111,11 +106,15 @@ export class WhatsappAdapter
       }
     });
 
-    socket.ev.on('creds.update' as 'connection.update', () => {
+    socket.ev.on('creds.update', () => {
       void saveCreds();
     });
 
     this.socket = socket;
+  }
+
+  private resolveAuthDir(): string {
+    return process.env.WHATSAPP_AUTH_DIR ?? '/app/data/baileys-auth';
   }
 
   private loadBaileys(): BaileysModule | null {
