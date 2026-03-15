@@ -14,6 +14,10 @@ export class ProviderStateService {
   private readonly providerState = new Map<string, ProviderRuntimeState>();
   private readonly qrEventEmitter = new EventEmitter();
 
+  constructor() {
+    this.qrEventEmitter.setMaxListeners(0);
+  }
+
   setQr(providerName: string, qr: string | null): void {
     this.ensure(providerName).qr = qr;
     this.qrEventEmitter.emit(this.toQrEvent(providerName), qr);

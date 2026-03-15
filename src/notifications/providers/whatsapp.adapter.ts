@@ -80,7 +80,7 @@ export class WhatsappAdapter
       return;
     }
 
-    const authDir = process.env.WHATSAPP_AUTH_DIR ?? '/app/data/baileys-auth';
+    const authDir = this.resolveAuthDir();
     await mkdir(authDir, { recursive: true });
 
     const { state, saveCreds } = await baileys.useMultiFileAuthState(authDir);
@@ -111,6 +111,10 @@ export class WhatsappAdapter
     });
 
     this.socket = socket;
+  }
+
+  private resolveAuthDir(): string {
+    return process.env.WHATSAPP_AUTH_DIR ?? '/app/data/baileys-auth';
   }
 
   private loadBaileys(): BaileysModule | null {

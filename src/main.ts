@@ -44,6 +44,41 @@ function loadNestSwagger(): {
   }
 }
 
+function setupFallbackSwagger(
+  expressApp: {
+    get: (path: string, handler: (req: Request, res: Response) => void) => void;
+  },
+  openApiPath: string,
+  docsPath: string,
+  qrStreamPath: string,
+): void {
+  expressApp.get(openApiPath, (_req, res) => {
+    res.json(createOpenApiDocument(qrStreamPath));
+  });
+
+  expressApp.get(docsPath, (_req, res) => {
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    res.send(`<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>MICRO.Notify Swagger</title>
+    <link rel="stylesheet" href="https://unpkg.com/swagger-ui-dist@5/swagger-ui.css" />
+  </head>
+  <body>
+    <div id="swagger-ui"></div>
+    <script src="https://unpkg.com/swagger-ui-dist@5/swagger-ui-bundle.js"></script>
+    <script>
+      window.ui = SwaggerUIBundle({
+        url: '${openApiPath}',
+        dom_id: '#swagger-ui'
+      });
+    </script>
+  </body>
+</html>`);
+  });
+}
+
 async function bootstrap(): Promise<void> {
   const app = await NestFactory.create(AppModule);
   const expressApp = app.getHttpAdapter().getInstance() as {
@@ -79,31 +114,7 @@ async function bootstrap(): Promise<void> {
 
     nestSwagger.SwaggerModule.setup(docsPath, app, nestDoc);
   } else {
-    expressApp.get(openApiPath, (_req, res) => {
-      res.json(createOpenApiDocument(qrStreamPath));
-    });
-
-    expressApp.get(docsPath, (_req, res) => {
-      res.setHeader('Content-Type', 'text/html; charset=utf-8');
-      res.send(`<!doctype html>
-<html>
-  <head>
-    <meta charset="utf-8" />
-    <title>MICRO.Notify Swagger</title>
-    <link rel="stylesheet" href="https://unpkg.com/swagger-ui-dist@5/swagger-ui.css" />
-  </head>
-  <body>
-    <div id="swagger-ui"></div>
-    <script src="https://unpkg.com/swagger-ui-dist@5/swagger-ui-bundle.js"></script>
-    <script>
-      window.ui = SwaggerUIBundle({
-        url: '${openApiPath}',
-        dom_id: '#swagger-ui'
-      });
-    </script>
-  </body>
-</html>`);
-    });
+    setupFallbackSwagger(expressApp, openApiPath, docsPath, qrStreamPath);
   }
 
   expressApp.get(qrStreamPath, (_req, res) => {
