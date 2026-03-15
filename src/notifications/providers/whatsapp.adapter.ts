@@ -107,6 +107,7 @@ export class WhatsappAdapter
       }
 
       if (connection === 'close') {
+        this.socket = null;
         this.providerState.setConnectionStatus(this.providerName, 'WAITING_QR');
       }
     });
