@@ -75,6 +75,11 @@ export class WhatsappAdapter
     for (const to of dto.to) {
       const jid = to.includes('@s.whatsapp.net') ? to : `${to}@s.whatsapp.net`;
       await this.socket.sendMessage(jid, { text: dto.message });
+      const baseDelay = parseInt(
+        process.env.WHATSAPP_RATE_LIMIT_DURATION || '1000',
+        10,
+      );
+      await new Promise((resolve) => setTimeout(resolve, baseDelay));
     }
 
     this.providerState.setLatency(

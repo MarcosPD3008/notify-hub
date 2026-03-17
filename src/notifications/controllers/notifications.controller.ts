@@ -19,9 +19,9 @@ export class NotificationsController {
   @Post('send')
   @ApiOperation({ summary: 'Envia notificaciones por provider' })
   @ApiBody({ type: SendNotificationDto })
-  @ApiResponse({ status: 201, description: 'Mensaje enviado' })
+  @ApiResponse({ status: 201, description: 'Mensaje enviado o encolado' })
   @ApiResponse({ status: 400, description: 'Payload inválido' })
-  async send(@Body() body: unknown): Promise<{ status: 'sent' }> {
+  async send(@Body() body: unknown): Promise<{ status: 'sent' | 'queued' }> {
     return this.dispatchService.dispatch(body);
   }
 }
