@@ -1,8 +1,16 @@
 import { BadRequestException } from '@nestjs/common';
+import { ApiProperty, getSchemaPath } from '@nestjs/swagger';
+import { WhatsappSendDto } from './whatsapp-send.dto';
 
-export interface SendNotificationDto {
-  provider: string;
-  data: unknown;
+export class SendNotificationDto {
+  @ApiProperty({ description: 'Proveedor a usar', example: 'whatsapp' })
+  provider!: string;
+
+  @ApiProperty({
+    description: 'Datos del mensaje según el proveedor',
+    oneOf: [{ $ref: getSchemaPath(WhatsappSendDto) }],
+  })
+  data!: unknown;
 }
 
 export function parseSendNotificationDto(body: unknown): SendNotificationDto {

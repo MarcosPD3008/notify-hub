@@ -1,26 +1,7 @@
 import 'dotenv/config';
 import { NestFactory } from '@nestjs/core';
-import { Request, Response } from 'express';
+import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
 import { AppModule } from './app.module';
-import { createOpenApiDocument } from './docs/openapi';
-import { ProviderStateService } from './notifications/services/provider-state.service';
-
-type SwaggerModuleType = {
-  setup: (
-    path: string,
-    app: unknown,
-    documentFactory: unknown,
-    options?: unknown,
-  ) => void;
-  createDocument: (app: unknown, config: unknown) => unknown;
-};
-
-type DocumentBuilderType = {
-  setTitle: (value: string) => DocumentBuilderType;
-  setDescription: (value: string) => DocumentBuilderType;
-  setVersion: (value: string) => DocumentBuilderType;
-  build: () => unknown;
-};
 
 function resolvePath(value: string | undefined, fallback: string): string {
   if (!value || value.trim().length === 0) {
@@ -30,121 +11,21 @@ function resolvePath(value: string | undefined, fallback: string): string {
   return value.startsWith('/') ? value : `/${value}`;
 }
 
-function loadNestSwagger(): {
-  SwaggerModule: SwaggerModuleType;
-  DocumentBuilder: new () => DocumentBuilderType;
-} | null {
-  try {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    return require('@nestjs/swagger') as {
-      SwaggerModule: SwaggerModuleType;
-      DocumentBuilder: new () => DocumentBuilderType;
-    };
-  } catch {
-    return null;
-  }
-}
-
-function setupFallbackSwagger(
-  expressApp: {
-    get: (path: string, handler: (req: Request, res: Response) => void) => void;
-  },
-  openApiPath: string,
-  docsPath: string,
-  qrStreamPath: string,
-): void {
-  expressApp.get(openApiPath, (_req, res) => {
-    res.json(createOpenApiDocument(qrStreamPath));
-  });
-
-  expressApp.get(docsPath, (_req, res) => {
-    res.setHeader('Content-Type', 'text/html; charset=utf-8');
-    res.send(`<!doctype html>
-<html>
-  <head>
-    <meta charset="utf-8" />
-    <title>MICRO.Notify Swagger</title>
-    <link rel="stylesheet" href="https://unpkg.com/swagger-ui-dist@5/swagger-ui.css" />
-  </head>
-  <body>
-    <div id="swagger-ui"></div>
-    <script src="https://unpkg.com/swagger-ui-dist@5/swagger-ui-bundle.js"></script>
-    <script>
-      window.ui = SwaggerUIBundle({
-        url: '${openApiPath}',
-        dom_id: '#swagger-ui'
-      });
-    </script>
-  </body>
-</html>`);
-  });
-}
-
 async function bootstrap(): Promise<void> {
   const app = await NestFactory.create(AppModule);
-  const expressApp = app.getHttpAdapter().getInstance() as {
-    get: (path: string, handler: (req: Request, res: Response) => void) => void;
-  };
 
-  const qrStreamPath = resolvePath(
-    process.env.QR_STREAM_PATH,
-    '/events/whatsapp/qr',
-  );
-  const openApiPath = resolvePath(process.env.SWAGGER_JSON_PATH, '/docs-json');
   const docsPath = resolvePath(process.env.SWAGGER_PATH, '/docs');
 
-  const providerState = app.get(ProviderStateService);
+  const swaggerConfig = new DocumentBuilder()
+    .setTitle('MICRO.Notify API')
+    .setDescription(
+      'Microservicio de notificaciones con arquitectura Provider/Adapter.',
+    )
+    .setVersion('1.0.0')
+    .build();
 
-  const nestSwagger = loadNestSwagger();
-  if (nestSwagger) {
-    const swaggerConfig = new nestSwagger.DocumentBuilder()
-      .setTitle('MICRO.Notify API')
-      .setDescription(
-        'Microservicio de notificaciones con arquitectura Provider/Adapter.',
-      )
-      .setVersion('1.0.0')
-      .build();
-    const nestDoc = nestSwagger.SwaggerModule.createDocument(
-      app,
-      swaggerConfig,
-    );
-
-    expressApp.get(openApiPath, (_req, res) => {
-      res.json(nestDoc);
-    });
-
-    nestSwagger.SwaggerModule.setup(docsPath, app, nestDoc);
-  } else {
-    setupFallbackSwagger(expressApp, openApiPath, docsPath, qrStreamPath);
-  }
-
-  expressApp.get(qrStreamPath, (_req, res) => {
-    res.setHeader('Content-Type', 'text/event-stream');
-    res.setHeader('Cache-Control', 'no-cache');
-    res.setHeader('Connection', 'keep-alive');
-
-    const writeQrEvent = (qr: string | null): void => {
-      const payload = JSON.stringify({ provider: 'whatsapp', qr });
-      res.write(`event: qr\n`);
-      res.write(`data: ${payload}\n\n`);
-    };
-
-    writeQrEvent(providerState.getQr('whatsapp'));
-
-    const unsubscribe = providerState.onQrUpdate('whatsapp', (qr) => {
-      writeQrEvent(qr);
-    });
-
-    const heartbeat = setInterval(() => {
-      res.write(': keep-alive\n\n');
-    }, 15000);
-
-    res.on('close', () => {
-      clearInterval(heartbeat);
-      unsubscribe();
-      res.end();
-    });
-  });
+  const nestDoc = SwaggerModule.createDocument(app, swaggerConfig);
+  SwaggerModule.setup(docsPath, app, nestDoc);
 
   await app.listen(process.env.PORT ?? 3000);
 }

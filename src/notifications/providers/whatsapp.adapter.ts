@@ -105,7 +105,12 @@ export class WhatsappAdapter
     await mkdir(authDir, { recursive: true });
 
     const { state, saveCreds } = await baileys.useMultiFileAuthState(authDir);
-    const socket = baileys.default({ auth: state, printQRInTerminal: false });
+    const socket = baileys.default({
+      auth: state,
+      printQRInTerminal: false,
+      browser: ['Ubuntu', 'Chrome', '20.0.04'],
+      version: [2, 3000, 1033893291],
+    });
 
     socket.ev.on('connection.update', (update) => {
       const qr = typeof update.qr === 'string' ? update.qr : null;
