@@ -4,9 +4,7 @@ WORKDIR /app
 COPY package*.json ./
 COPY tsconfig*.json ./
 COPY nest-cli.json ./
-COPY eslint.config.mjs ./
 COPY src ./src
-COPY test ./test
 
 RUN npm ci --include=dev
 RUN npm run build

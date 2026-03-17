@@ -2,7 +2,10 @@ import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { mkdir } from 'node:fs/promises';
 import { performance } from 'node:perf_hooks';
 import { BaseNotificationProvider } from './base-notification.provider';
-import { parseWhatsappSendDto } from '../dto/whatsapp-send.dto';
+import {
+  parseWhatsappSendDto,
+  WhatsappDocumentDto,
+} from '../dto/whatsapp-send.dto';
 import { ProviderStateService } from '../services/provider-state.service';
 
 interface ConnectionUpdate {
@@ -17,6 +20,13 @@ interface ConnectionUpdate {
   };
 }
 
+type BaileysContent =
+  | { text: string }
+  | { image: Buffer; caption?: string; mimetype?: string }
+  | { video: Buffer; caption?: string; mimetype?: string }
+  | { audio: Buffer; mimetype?: string }
+  | { document: Buffer; mimetype: string; fileName?: string; caption?: string };
+
 interface BaileysSocket {
   ev: {
     on(
@@ -25,7 +35,7 @@ interface BaileysSocket {
     ): void;
     on(event: 'creds.update', listener: () => void): void;
   };
-  sendMessage(jid: string, content: { text: string }): Promise<unknown>;
+  sendMessage(jid: string, content: BaileysContent): Promise<unknown>;
 }
 
 interface BaileysModule {
@@ -71,21 +81,102 @@ export class WhatsappAdapter
       );
     }
 
+    const rateDelay = parseInt(
+      process.env.WHATSAPP_RATE_LIMIT_DURATION || '1000',
+      10,
+    );
     const startedAt = performance.now();
+
     for (const to of dto.to) {
       const jid = to.includes('@s.whatsapp.net') ? to : `${to}@s.whatsapp.net`;
-      await this.socket.sendMessage(jid, { text: dto.message });
-      const baseDelay = parseInt(
-        process.env.WHATSAPP_RATE_LIMIT_DURATION || '1000',
-        10,
-      );
-      await new Promise((resolve) => setTimeout(resolve, baseDelay));
+
+      if (dto.message) {
+        await this.socket.sendMessage(jid, { text: dto.message });
+        await new Promise((resolve) => setTimeout(resolve, rateDelay));
+      }
+
+      for (const doc of dto.documents ?? []) {
+        await this.socket.sendMessage(jid, await this.buildBaileysContent(doc));
+        await new Promise((resolve) => setTimeout(resolve, rateDelay));
+      }
     }
 
     this.providerState.setLatency(
       this.providerName,
       Math.round(performance.now() - startedAt),
     );
+  }
+
+  private async buildBaileysContent(
+    doc: WhatsappDocumentDto,
+  ): Promise<BaileysContent> {
+    const { buffer, mimetype } = await this.resolveMedia(doc);
+
+    if (mimetype.startsWith('image/')) {
+      return { image: buffer, mimetype, caption: doc.caption };
+    }
+
+    if (mimetype.startsWith('video/')) {
+      return { video: buffer, mimetype, caption: doc.caption };
+    }
+
+    if (mimetype.startsWith('audio/')) {
+      return { audio: buffer, mimetype };
+    }
+
+    return {
+      document: buffer,
+      mimetype,
+      fileName: doc.filename,
+      caption: doc.caption,
+    };
+  }
+
+  private async resolveMedia(
+    doc: WhatsappDocumentDto,
+  ): Promise<{ buffer: Buffer; mimetype: string }> {
+    if (doc.base64) {
+      this.logger.log(`Decoding base64 media (${doc.mimetype})`);
+      return {
+        buffer: Buffer.from(doc.base64, 'base64'),
+        mimetype: doc.mimetype ?? '',
+      };
+    }
+
+    this.logger.log(`Fetching media from URL: ${doc.url}`);
+    let response: Response;
+    try {
+      response = await fetch(doc.url as string, {
+        headers: {
+          'User-Agent':
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+        },
+      });
+    } catch (err) {
+      this.logger.error(`Network error fetching media: ${String(err)}`);
+      throw err;
+    }
+
+    const rawContentType =
+      response.headers.get('content-type') ?? 'application/octet-stream';
+    const detectedMimetype = rawContentType.split(';')[0].trim();
+
+    this.logger.log(
+      `Fetch response: ${response.status} ${response.statusText} — content-type: ${detectedMimetype}`,
+    );
+
+    if (!response.ok) {
+      const msg = `Failed to fetch media from URL (${response.status}): ${doc.url}`;
+      this.logger.error(msg);
+      throw new Error(msg);
+    }
+
+    const buffer = Buffer.from(await response.arrayBuffer());
+    const mimetype = doc.mimetype ?? detectedMimetype;
+    this.logger.log(
+      `Media downloaded: ${buffer.byteLength} bytes — mimetype: ${mimetype}`,
+    );
+    return { buffer, mimetype };
   }
 
   getHealth(): { status: 'CONNECTED' | 'WAITING_QR'; latency: string } {

@@ -1,60 +1,154 @@
 # Flujo de WhatsApp
 
-Este documento describe cómo MICRO.Notify maneja la integración con WhatsApp a través del proveedor (adapter) internamente configurado.
+Este documento describe cómo MICRO.Notify maneja la integración con WhatsApp a través del adaptador `WhatsappAdapter` (Baileys).
 
-## 1. Autenticación y Conexión (Auth Flow)
+---
 
-El microservicio utiliza la librería [Baileys](https://github.com/WhiskeySockets/Baileys) para conectarse a la API de WhatsApp mediante el protocolo Multi-Device (MD) simulando ser un dispositivo Web.
+## 1. Autenticación y Conexión
 
-1. **Inicialización**: Al arrancar el servicio y levantar el módulo de notificaciones, se comprueba si existen credenciales previas almacenadas en el sistema (por ejemplo, en el volumen persistente).
-2. **Generación de QR**: Si no hay una sesión activa, el adaptador comienza el proceso asíncrono y recibe eventos para generar códigos QR que permitan vincular un dispositivo.
-3. **Escucha de QR**:
-   - Los clientes pueden ver el último QR renderizado en formato HTML accediendo estáticamente a la ruta `GET /auth/qr`.
-   - Para aplicaciones web/frontend (o integraciones de backend reactivas), se puede mantener una conexión persistente mediante Server-Sent Events (SSE) en `GET /events/whatsapp/qr` para recibir la actualización del código en tiempo real de forma responsiva y sin recargar, mientras este va rotando.
-4. **Escaneo y Vinculación**: Una vez el usuario escanea el QR con su aplicación móvil principal de WhatsApp, el servicio guarda de forma segura las credenciales de la sesión en disco y el estado del servicio pasa internamente a **CONNECTED**.
+El microservicio usa [Baileys](https://github.com/WhiskeySockets/Baileys) para conectarse a WhatsApp via protocolo Multi-Device, simulando un dispositivo Web.
 
-> **Nota**: Los eventos del código QR se emiten tanto de forma interna a través del manejador global de estado (`ProviderStateService`) como de forma pública mediante los endpoints de visualización.
+1. **Inicialización**: Al levantar el módulo, se verifica si existen credenciales previas en `WHATSAPP_AUTH_DIR`.
+2. **Generación de QR**: Si no hay sesión activa, Baileys emite eventos QR que el adaptador propaga vía `ProviderStateService`.
+3. **Escucha del QR**:
+   - `GET /auth/qr` — página HTML con el QR actual.
+   - `GET /events/whatsapp/qr` — stream SSE con rotación en tiempo real (heartbeat cada 15 s).
+4. **Vinculación**: Al escanear el QR con WhatsApp móvil, las credenciales se persisten en disco y el estado pasa a **CONNECTED**.
+5. **Reconexión automática**: Si la conexión se cierra, el adaptador reintenta con backoff exponencial (`base * 2^n`, máximo `WHATSAPP_RECONNECT_MAX_DELAY_MS`).
 
-## 2. Envío de Mensajes (Send Flow)
+---
 
-El envío de notificaciones no se hace llamando de forma enlazada (hard-coded) al servicio de WhatsApp, sino a través del enrutador central de notificaciones `POST /send` cual delega de acuerdo al proveedor indicado en el request body.
+## 2. Envío de Mensajes
 
-1. **Recepción de la Petición**: El cliente hace un REST Http Request al microservicio a través de `POST /send` indicando explícitamente `provider: "whatsapp"` y un payload en el nodo estructural de `data` específico en su formato y tipado para este controlador emisor.
-2. **Despacho (Dispatching)**: El controlador recibe el payload y el `NotificationDispatchService` identifica al vuelo que el destino del mensaje es WhatsApp.
-3. **Inyección y Obtención**: Se obtiene internamente el puente con la sesión principal `WhatsappAdapter` utilizando la factoría generadora de proveedores `ProviderFactoryService`.
-4. **Validaciones**:
-   - Se validan los datos predeterminados en `data` (destinatarios presentados en el array `to` y el cuerpo estricto del `message`) usando los DTOs definidos de inyección como el `WhatsappSendDto`.
-   - Se limpian y preparan los números telefónicos usando un sanitizer RegEx de solo-dígitos.
-5. **Transmisión de Salida**: Luego el adaptador procesa e invoca la función de mensajería (a través de Baileys WA Socket) para ir entregando el texto directo a los identificadores remotos en formato puro y enlazado de WhatsApp (e.g., `123456789@s.whatsapp.net`).
+### 2.1 Payload
 
-## Diagrama del Flujo de Interacción
+```jsonc
+// POST /send
+{
+  "provider": "whatsapp",
+  "scheduleTime": "2026-03-18T10:00:00.000Z",  // opcional
+  "data": {
+    "to": ["521234567890"],          // uno o más números
+    "message": "Texto del mensaje",  // opcional si hay documents
+    "documents": [                   // opcional si hay message
+      {
+        "url": "https://...",        // URL pública (mutuamente excluyente con base64)
+        "base64": "<base64>",        // contenido codificado (mutuamente excluyente con url)
+        "mimetype": "image/png",     // opcional con url (auto-detectado); requerido con base64
+        "filename": "foto.png",      // opcional — nombre visible en documentos
+        "caption": "Descripción"     // opcional — texto bajo el archivo
+      }
+    ]
+  }
+}
+```
+
+**Reglas de validación:**
+- Al menos uno de `message` o `documents` es requerido.
+- Cada documento debe tener `url` **o** `base64`, nunca ambos ni ninguno.
+- `mimetype` se auto-detecta desde el header `Content-Type` cuando se usa `url`. Si se provee explícitamente, tiene precedencia.
+- `mimetype` es requerido cuando se usa `base64`.
+- `scheduleTime` debe ser un datetime ISO 8601 en el futuro.
+
+### 2.2 Detección automática de mimetype
+
+Cuando se envía un documento por URL, el servicio descarga el archivo y lee el header `Content-Type` de la respuesta HTTP. El valor se limpia de parámetros extra (`image/jpeg; charset=utf-8` → `image/jpeg`).
+
+### 2.3 Ruteo de tipo de media
+
+| Mimetype | Tipo enviado en WhatsApp |
+|---|---|
+| `image/*` | Imagen |
+| `video/*` | Video |
+| `audio/*` | Audio |
+| cualquier otro | Documento |
+
+### 2.4 Envío programado
+
+Si se incluye `scheduleTime`, el job se encola con `delay = scheduleTime - now` en BullMQ. Redis persiste el job y lo libera en el momento exacto, incluso si el servicio reinicia antes.
+
+---
+
+## 3. Flujo interno (paso a paso)
+
+```
+POST /send
+  │
+  ├─ parseSendNotificationDto
+  │    └─ valida: provider, data, scheduleTime (futuro si presente)
+  │
+  ├─ ProviderFactoryService.get("whatsapp")
+  │
+  ├─ QueueFactoryService.getQueue("whatsapp")
+  │    └─ resuelve whatsapp-queue (o fallback notifications-queue)
+  │
+  └─ queue.add("send-message", payload, { delay?, attempts, backoff })
+       │
+       └─ WhatsappProcessor (BullMQ worker)
+            └─ WhatsappAdapter.send(payload)
+                 │
+                 ├─ parseWhatsappSendDto
+                 │    └─ valida to[], message?, documents[]
+                 │
+                 └─ por cada destinatario (to[]):
+                      ├─ sendMessage({ text })           ← si hay message
+                      │    └─ rate limit delay
+                      │
+                      └─ por cada documento:
+                           ├─ resolveMedia()
+                           │    ├─ base64 → Buffer.from(base64)
+                           │    └─ url    → fetch() + detecta Content-Type
+                           │
+                           ├─ buildBaileysContent()
+                           │    └─ mimetype → image | video | audio | document
+                           │
+                           └─ sendMessage(content)
+                                └─ rate limit delay
+```
+
+---
+
+## 4. Diagrama de secuencia
 
 ```mermaid
 sequenceDiagram
     participant Client
     participant Service as MICRO.Notify
+    participant Redis
+    participant Worker as WhatsappProcessor
+    participant Adapter as WhatsappAdapter
     participant Baileys
-    participant WhatsApp App
+    participant WA as WhatsApp App
 
     %% Autenticación
     rect rgb(200, 220, 240)
-    Note over Client, WhatsApp App: Flujo de Autenticación Continua
-    Service->>Baileys: Iniciar conexión de socket
-    Baileys-->>Service: Generar QR (necesita vinculación manual)
+    Note over Client,WA: Autenticación
+    Service->>Baileys: Iniciar socket (useMultiFileAuthState)
+    Baileys-->>Service: Evento QR
     Client->>Service: GET /events/whatsapp/qr (SSE)
-    Service-->>Client: Stream automático y rotatorio del QR
-    Client->>Client: Mostrar QR al usuario final en pantalla
-    WhatsApp App->>Baileys: Cámara escanea el QR emitido
-    Baileys-->>Service: Evento de credenciales listas (Guarda sesión persistente)
+    Service-->>Client: Stream QR en tiempo real
+    WA->>Baileys: Escanea QR
+    Baileys-->>Service: creds.update → sesión persistida
+    Service->>Service: Estado → CONNECTED
     end
 
     %% Envío
     rect rgb(220, 240, 200)
-    Note over Client, WhatsApp App: Flujo de Envío Programático de Mensajes 
-    Client->>Service: POST /send { provider: "whatsapp", data: {...} }
-    Service->>Service: Despachador de factoría valida provider & DTO
-    Service->>Baileys: Enviar mensaje iterativo al WhatsApp JIDs
-    Baileys-->>Service: Confirmación protocolar de envío base
-    Service-->>Client: 201 Retorno con el identificador del Mensaje enviado
+    Note over Client,WA: Envío (inmediato o programado)
+    Client->>Service: POST /send { provider, scheduleTime?, data }
+    Service->>Service: Valida DTO + calcula delay
+    Service->>Redis: queue.add(job, { delay })
+    Service-->>Client: 201 { status: "queued" }
+    Redis->>Worker: Libera job (inmediato o en scheduleTime)
+    Worker->>Adapter: send(payload)
+    loop Por destinatario
+        Adapter->>Baileys: sendMessage({ text })
+        loop Por documento
+            Adapter->>Adapter: fetch(url) o decode(base64)
+            Adapter->>Adapter: detecta mimetype
+            Adapter->>Baileys: sendMessage(image|video|audio|document)
+        end
+    end
+    Baileys-->>WA: Entrega mensajes
     end
 ```

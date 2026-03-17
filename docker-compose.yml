@@ -7,22 +7,38 @@ services:
     restart: unless-stopped
     env_file:
       - .env
+    environment:
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
     ports:
-      - "3000:3000"
+      - "${PORT:-3000}:3000"
     volumes:
       - whatsapp-auth:/app/data/baileys-auth
     depends_on:
-      - redis
+      redis:
+        condition: service_healthy
+    networks:
+      - notify-net
 
   redis:
-    image: redis:alpine
+    image: redis:7-alpine
     container_name: notify-redis
     restart: unless-stopped
-    ports:
-      - "6380:6379"
+    command: redis-server --appendonly yes
     volumes:
       - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    networks:
+      - notify-net
 
 volumes:
   whatsapp-auth:
   redis-data:
+
+networks:
+  notify-net:
+    driver: bridge

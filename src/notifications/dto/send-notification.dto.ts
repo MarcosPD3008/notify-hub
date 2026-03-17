@@ -11,6 +11,13 @@ export class SendNotificationDto {
     oneOf: [{ $ref: getSchemaPath(WhatsappSendDto) }],
   })
   data!: unknown;
+
+  @ApiProperty({
+    required: false,
+    description: 'ISO 8601 datetime to schedule the send (must be in the future)',
+    example: '2026-03-18T10:00:00.000Z',
+  })
+  scheduleTime?: Date;
 }
 
 export function parseSendNotificationDto(body: unknown): SendNotificationDto {
@@ -30,8 +37,23 @@ export function parseSendNotificationDto(body: unknown): SendNotificationDto {
     throw new BadRequestException('data is required.');
   }
 
+  let scheduleTime: Date | undefined;
+  if (payload.scheduleTime !== undefined && payload.scheduleTime !== null) {
+    const parsed = new Date(payload.scheduleTime as string);
+    if (isNaN(parsed.getTime())) {
+      throw new BadRequestException(
+        'scheduleTime must be a valid ISO 8601 datetime string.',
+      );
+    }
+    if (parsed.getTime() <= Date.now()) {
+      throw new BadRequestException('scheduleTime must be a future datetime.');
+    }
+    scheduleTime = parsed;
+  }
+
   return {
     provider: payload.provider,
     data: payload.data,
+    scheduleTime,
   };
 }

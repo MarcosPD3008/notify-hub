@@ -2,13 +2,16 @@
 
 MICRO.Notify es un robusto microservicio fuertemente tipado en NestJS diseñado para unificar y facilitar el envío de notificaciones multiplataforma utilizando un patrón de arquitectura **Provider/Adapter**. 
 
-Su objetivo principal es ofrecer una API unificada (`POST /send`), permitiendo la fácil y limpia integración de múltiples canales de comunicación y proveedores de notificaciones en un solo punto de entrada. Incluye de forma nativa soporte para [WhatsApp Asíncrono](#1-flujo-de-whatsapp) con manejo automático de eventos, autenticación asíncrona, rotación de códigos QR mediante Server-Sent Events (SSE) y esquema validado DTOs.
+Su objetivo principal es ofrecer una API unificada (`POST /send`), permitiendo la fácil y limpia integración de múltiples canales de comunicación y proveedores de notificaciones en un solo punto de entrada. Incluye de forma nativa soporte para [WhatsApp Asíncrono](./flows/whatsapp.md) con envío de texto y archivos (URL o base64), envío programado, autenticación QR via SSE y reconexión automática.
 
 ## Características Principales
 
-- **Arquitectura Extensible y Escalable**: Gracias a su uso interno de *Factory Patterns* y adaptadores agnósticos, te permite añadir nuevos proveedores (SMS, Resend, SendGrid) sin apenas tocar la lógica modular del núcleo base.
-- **Micro-Integración de WhatsApp**: Utiliza la conexión nativa socket *Multi-Device* mediante Baileys con persistencia y manejo del estado integrado sin depender de servicios pagos.
-- **Documentación Completa**: Los controladores utilizan los estándares de decoración `@nestjs/swagger` y brindan UI dinámicas sin esfuerzo y esquemas de OpenApi.
+- **Arquitectura Extensible**: Factory + Adapter pattern — agregar SMS, Email u otro proveedor sin tocar el núcleo.
+- **WhatsApp nativo**: Conexión Multi-Device via Baileys, sin APIs de pago. Sesión persistente en volumen Docker.
+- **Envío de archivos**: Imágenes, videos, audios y documentos via URL o base64. Mimetype auto-detectado desde `Content-Type`.
+- **Envío programado**: Campo `scheduleTime` (ISO 8601) para encolar jobs con delay exacto en Redis/BullMQ.
+- **Reconexión automática**: Backoff exponencial configurable ante desconexiones de WhatsApp.
+- **Documentación Completa**: Swagger UI en `/docs` con esquemas OpenAPI.
 
 ---
 
@@ -28,10 +31,10 @@ Puedes ver la documentación interactiva provista tras compilar accediendo local
 - `GET /docs-json` (Specification OpenAPI pura de los DTOs)
 
 Las operativas internas del proyecto consisten en:
-- `GET /health` : Obtiene el estado de saludo general del servidor y de los proveedores mapeados con sus latencias de conexión.
-- `GET /auth/qr` : Endpoint que da respuesta HTML para simular y previsualizar de forma en crudo el código QR activo.
-- `GET /events/whatsapp/qr` : Endpoint reactivo para flujos asíncronos en clientes basados en eventos que devuelve un stream de actualización y de latido (SSE).
-- `POST /send` : Punto de entrada agnóstico universal para enviar notificaciones utilizando el cuerpo DTO del request.
+- `POST /send` — Punto de entrada universal. Acepta `provider`, `data` y `scheduleTime` (opcional).
+- `GET /health` — Estado de conexión y latencia de cada proveedor registrado.
+- `GET /auth/qr` — Página HTML con el QR actual de WhatsApp.
+- `GET /events/whatsapp/qr` — Stream SSE con rotación de QR en tiempo real (heartbeat cada 15 s).
 
 ## Entorno Local
 
