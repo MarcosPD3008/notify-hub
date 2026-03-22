@@ -7,6 +7,8 @@ import {
   WhatsappDocumentDto,
 } from '../dto/whatsapp-send.dto';
 import { ProviderStateService } from '../services/provider-state.service';
+import { Cron } from '@nestjs/schedule';
+import { MonitoringService } from '../services/monitoring.service';
 
 interface ConnectionUpdate {
   qr?: string;
@@ -64,12 +66,20 @@ export class WhatsappAdapter
   private reconnectAttempts = 0;
   private reconnectTimer: NodeJS.Timeout | null = null;
 
-  constructor(private readonly providerState: ProviderStateService) {
+  constructor(
+    private readonly providerState: ProviderStateService,
+    private readonly monitoringService: MonitoringService,
+  ) {
     super();
   }
 
   async onModuleInit(): Promise<void> {
     await this.bootstrapBaileys();
+  }
+
+  @Cron('*/5 * * * *') // Run every 5 minutes
+  async monitorWhatsAppStatus(): Promise<void> {
+    await this.monitoringService.checkWhatsAppStatus();
   }
 
   async send(payload: unknown): Promise<void> {
