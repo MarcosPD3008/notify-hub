@@ -1,5 +1,6 @@
-import { Injectable } from '@nestjs/common';
-import { EventEmitter } from 'node:events';
+import { Injectable, Logger } from '@nestjs/common';
+import * as fs from 'fs-extra';
+import { join } from 'path';
 
 export type ProviderConnectionStatus = 'CONNECTED' | 'WAITING_QR';
 
@@ -11,6 +12,9 @@ interface ProviderRuntimeState {
 
 @Injectable()
 export class ProviderStateService {
+  private readonly logger = new Logger(ProviderStateService.name);
+  private readonly authInfoPath = join(process.cwd(), 'auth_info');
+
   private readonly providerState = new Map<string, ProviderRuntimeState>();
   private readonly qrEventEmitter = new EventEmitter();
 
@@ -52,6 +56,32 @@ export class ProviderStateService {
 
   getSnapshot(providerName: string): ProviderRuntimeState {
     return this.ensure(providerName);
+  }
+
+  handleConnectionError(error: any) {
+    if (error?.code === 401 || error?.code === 500) {
+      this.logger.error(`Session error detected: ${error.message}`);
+      this.resetSession();
+    }
+  }
+
+  private resetSession() {
+    this.logger.warn('Resetting session due to error...');
+    try {
+      if (fs.existsSync(this.authInfoPath)) {
+        fs.removeSync(this.authInfoPath);
+        this.logger.log('Auth info directory removed successfully.');
+      }
+    } catch (err) {
+      this.logger.error(`Failed to remove auth info directory: ${err.message}`);
+    }
+
+    this.restartProcess();
+  }
+
+  private restartProcess() {
+    this.logger.log('Restarting process to generate a new QR code...');
+    process.exit(1); // Exit the process to allow a restart mechanism to take over
   }
 
   private toQrEvent(providerName: string): string {
