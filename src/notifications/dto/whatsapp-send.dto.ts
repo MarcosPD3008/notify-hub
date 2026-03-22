@@ -31,6 +31,15 @@ export class WhatsappSendDto {
 
   @ApiProperty({ required: false, type: [WhatsappDocumentDto] })
   documents?: WhatsappDocumentDto[];
+
+  @ApiProperty({ required: false, example: 'READ' })
+  receiptStatus?: string;
+
+  @ApiProperty({ required: false, example: '1234567890' })
+  messageId?: string;
+
+  @ApiProperty({ required: false, example: 1672531200 })
+  timestamp?: number;
 }
 
 function parseDocument(
@@ -130,5 +139,8 @@ export function parseWhatsappSendDto(data: unknown): WhatsappSendDto {
     to: recipients.map((num) => num.replace(/\D/g, '')),
     message: hasMessage ? (payload.message as string) : undefined,
     documents,
+    receiptStatus: payload.receiptStatus as string,
+    messageId: payload.messageId as string,
+    timestamp: payload.timestamp as number,
   };
 }

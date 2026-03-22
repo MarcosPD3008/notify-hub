@@ -7,6 +7,7 @@ interface ProviderRuntimeState {
   qr: string | null;
   status: ProviderConnectionStatus;
   latencyMs: number | null;
+  verifiedMessages: Set<string>;
 }
 
 @Injectable()
@@ -50,6 +51,16 @@ export class ProviderStateService {
     this.ensure(providerName).latencyMs = latencyMs;
   }
 
+  markMessageAsVerified(providerName: string, messageId: string): void {
+    const state = this.ensure(providerName);
+    state.verifiedMessages.add(messageId);
+  }
+
+  isMessageVerified(providerName: string, messageId: string): boolean {
+    const state = this.ensure(providerName);
+    return state.verifiedMessages.has(messageId);
+  }
+
   getSnapshot(providerName: string): ProviderRuntimeState {
     return this.ensure(providerName);
   }
@@ -64,6 +75,7 @@ export class ProviderStateService {
         qr: null,
         status: 'WAITING_QR',
         latencyMs: null,
+        verifiedMessages: new Set(),
       });
     }
 
