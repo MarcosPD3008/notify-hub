@@ -1,7 +1,8 @@
 import { Injectable } from '@nestjs/common';
 import { EventEmitter } from 'node:events';
+import { EmailService } from './email.service';
 
-export type ProviderConnectionStatus = 'CONNECTED' | 'WAITING_QR';
+export type ProviderConnectionStatus = 'CONNECTED' | 'WAITING_QR' | 'DISCONNECTED' | 'CONFLICT';
 
 interface ProviderRuntimeState {
   qr: string | null;
@@ -14,7 +15,7 @@ export class ProviderStateService {
   private readonly providerState = new Map<string, ProviderRuntimeState>();
   private readonly qrEventEmitter = new EventEmitter();
 
-  constructor() {
+  constructor(private readonly emailService: EmailService) {
     this.qrEventEmitter.setMaxListeners(0);
   }
 
@@ -43,7 +44,12 @@ export class ProviderStateService {
     providerName: string,
     status: ProviderConnectionStatus,
   ): void {
+    const previousStatus = this.ensure(providerName).status;
     this.ensure(providerName).status = status;
+
+    if (status !== previousStatus) {
+      this.handleStatusChange(providerName, status);
+    }
   }
 
   setLatency(providerName: string, latencyMs: number | null): void {
@@ -68,5 +74,18 @@ export class ProviderStateService {
     }
 
     return this.providerState.get(providerName)!;
+  }
+
+  private async handleStatusChange(
+    providerName: string,
+    status: ProviderConnectionStatus,
+  ): Promise<void> {
+    if (providerName === 'whatsapp' && (status === 'DISCONNECTED' || status === 'CONFLICT')) {
+      await this.emailService.sendEmail(
+        'admin@notify-hub.com',
+        'WhatsApp Channel Alert',
+        `The WhatsApp channel is in a problematic state: ${status}. Please investigate.`
+      );
+    }
   }
 }
