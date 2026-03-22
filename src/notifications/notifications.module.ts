@@ -10,6 +10,7 @@ import { NotificationDispatchService } from './services/notification-dispatch.se
 import { ProviderFactoryService } from './services/provider-factory.service';
 import { ProviderStateService } from './services/provider-state.service';
 import { QueueFactoryService } from './services/queue-factory.service';
+import { EmailService } from './services/email.service';
 
 @Module({
   imports: [
@@ -31,6 +32,7 @@ import { QueueFactoryService } from './services/queue-factory.service';
     NotificationDispatchService,
     NotificationProcessor,
     WhatsappProcessor,
+    EmailService,
   ],
 })
 export class NotificationsModule {}
