@@ -10,6 +10,7 @@ import { NotificationDispatchService } from './services/notification-dispatch.se
 import { ProviderFactoryService } from './services/provider-factory.service';
 import { ProviderStateService } from './services/provider-state.service';
 import { QueueFactoryService } from './services/queue-factory.service';
+import { ReadVerifier } from '../skills/read-verifier';
 
 @Module({
   imports: [
@@ -19,6 +20,9 @@ import { QueueFactoryService } from './services/queue-factory.service';
       },
       {
         name: 'whatsapp-queue',
+      },
+      {
+        name: 'verified-messages',
       },
     ),
   ],
@@ -31,6 +35,7 @@ import { QueueFactoryService } from './services/queue-factory.service';
     NotificationDispatchService,
     NotificationProcessor,
     WhatsappProcessor,
+    ReadVerifier,
   ],
 })
 export class NotificationsModule {}
