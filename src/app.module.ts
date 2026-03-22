@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { BullModule } from '@nestjs/bullmq';
+import { ScheduleModule } from '@nestjs/schedule';
 import { NotificationsModule } from './notifications/notifications.module';
 
 @Module({
@@ -10,6 +11,7 @@ import { NotificationsModule } from './notifications/notifications.module';
         port: parseInt(process.env.REDIS_PORT || '6379', 10),
       },
     }),
+    ScheduleModule.forRoot(),
     NotificationsModule,
   ],
 })
