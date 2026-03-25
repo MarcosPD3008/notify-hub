@@ -1,5 +1,9 @@
 # See https://docs.github.com/en/get-started/getting-started-with-git/ignoring-files for more about ignoring files.
 
+# Internal dev docs (planning, architecture, roadmaps)
+docs/
+flows/
+
 # compiled output
 dist
 tmp

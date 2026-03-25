@@ -1,19 +1,22 @@
-import { Injectable, OnModuleInit } from '@nestjs/common';
+import { Inject, Injectable, Optional } from '@nestjs/common';
 import { BaseNotificationProvider } from '../providers/base-notification.provider';
-import { WhatsappAdapter } from '../providers/whatsapp.adapter';
+
+export const NOTIFICATION_PROVIDER = 'NOTIFICATION_PROVIDER';
 
 @Injectable()
-export class ProviderFactoryService implements OnModuleInit {
+export class ProviderFactoryService {
   private readonly providers = new Map<string, BaseNotificationProvider>();
 
-  constructor(private readonly whatsappAdapter: WhatsappAdapter) {}
-
-  onModuleInit(): void {
-    this.register(this.whatsappAdapter);
-  }
-
-  register(provider: BaseNotificationProvider): void {
-    this.providers.set(provider.providerName, provider);
+  constructor(
+    @Optional()
+    @Inject(NOTIFICATION_PROVIDER)
+    providers: BaseNotificationProvider | BaseNotificationProvider[],
+  ) {
+    if (!providers) return;
+    const list = Array.isArray(providers) ? providers : [providers];
+    for (const p of list) {
+      this.providers.set(p.providerName, p);
+    }
   }
 
   get(providerName: string): BaseNotificationProvider | undefined {

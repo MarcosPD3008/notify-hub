@@ -12,9 +12,11 @@ import {
   ApiResponse,
   ApiProduces,
 } from '@nestjs/swagger';
+import { Public } from '../../auth/decorators/public.decorator';
 import { Observable } from 'rxjs';
 import { ProviderStateService } from '../services/provider-state.service';
 
+@Public()
 @ApiTags('WhatsApp')
 @Controller()
 export class WhatsappController {

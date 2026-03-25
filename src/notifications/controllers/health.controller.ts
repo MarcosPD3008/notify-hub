@@ -1,7 +1,10 @@
 import { Controller, Get } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse } from '@nestjs/swagger';
 import { ProviderFactoryService } from '../services/provider-factory.service';
+import { ChannelStatus } from '../providers/base-notification.provider';
+import { Public } from '../../auth/decorators/public.decorator';
 
+@Public()
 @ApiTags('Health')
 @Controller('health')
 export class HealthController {
@@ -9,31 +12,16 @@ export class HealthController {
 
   @Get()
   @ApiOperation({ summary: 'Healthcheck del servicio' })
-  @ApiResponse({
-    status: 200,
-    description: 'Estado del servicio y proveedores',
-  })
-  check(): {
-    status: 'up';
-    providers: Record<
-      string,
-      { status: 'CONNECTED' | 'WAITING_QR'; latency: string }
-    >;
-  } {
+  @ApiResponse({ status: 200, description: 'Estado del servicio y proveedores' })
+  check(): { status: 'up'; providers: Record<string, { status: ChannelStatus }> } {
     const providers = this.providerFactory.getAll().reduce(
-      (accumulator, provider) => {
-        accumulator[provider.providerName] = provider.getHealth();
-        return accumulator;
+      (acc, provider) => {
+        acc[provider.providerName] = { status: provider.getChannelStatus() };
+        return acc;
       },
-      {} as Record<
-        string,
-        { status: 'CONNECTED' | 'WAITING_QR'; latency: string }
-      >,
+      {} as Record<string, { status: ChannelStatus }>,
     );
 
-    return {
-      status: 'up',
-      providers,
-    };
+    return { status: 'up', providers };
   }
 }

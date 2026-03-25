@@ -1,7 +1,8 @@
 import { Injectable } from '@nestjs/common';
 import { EventEmitter } from 'node:events';
+import { ChannelStatus } from '../providers/base-notification.provider';
 
-export type ProviderConnectionStatus = 'CONNECTED' | 'WAITING_QR';
+export type ProviderConnectionStatus = ChannelStatus | 'WAITING_QR';
 
 interface ProviderRuntimeState {
   qr: string | null;

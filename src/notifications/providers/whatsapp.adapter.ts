@@ -1,7 +1,13 @@
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
+import { randomUUID } from 'node:crypto';
 import { mkdir } from 'node:fs/promises';
 import { performance } from 'node:perf_hooks';
-import { BaseNotificationProvider } from './base-notification.provider';
+import {
+  BaseNotificationProvider,
+  ChannelStatus,
+  InboundMessage,
+  InboundMessageHandler,
+} from './base-notification.provider';
 import {
   parseWhatsappSendDto,
   WhatsappDocumentDto,
@@ -27,6 +33,12 @@ type BaileysContent =
   | { audio: Buffer; mimetype?: string }
   | { document: Buffer; mimetype: string; fileName?: string; caption?: string };
 
+interface BaileysMessage {
+  key: { remoteJid?: string | null; fromMe?: boolean | null; id?: string | null };
+  message?: Record<string, unknown> | null;
+  messageTimestamp?: number | string | null;
+}
+
 interface BaileysSocket {
   ev: {
     on(
@@ -34,12 +46,17 @@ interface BaileysSocket {
       listener: (update: ConnectionUpdate) => void,
     ): void;
     on(event: 'creds.update', listener: () => void): void;
+    on(
+      event: 'messages.upsert',
+      listener: (data: { messages: BaileysMessage[]; type: string }) => void,
+    ): void;
   };
   sendMessage(jid: string, content: BaileysContent): Promise<unknown>;
 }
 
 interface BaileysModule {
-  default: (config: Record<string, unknown>) => BaileysSocket;
+  fetchLatestBaileysVersion: () => Promise<{ version: [number, number, number] }>;
+  default: (config: Record<string, unknown> & { getMessage?: (key: unknown) => Promise<unknown>; syncFullHistory?: boolean }) => BaileysSocket;
   useMultiFileAuthState: (
     authDir: string,
   ) => Promise<{ state: unknown; saveCreds: () => Promise<void> }>;
@@ -51,8 +68,10 @@ export class WhatsappAdapter
   implements OnModuleInit
 {
   readonly providerName = 'whatsapp';
+  override readonly supportsInbound = true;
 
   private readonly logger = new Logger(WhatsappAdapter.name);
+  private inboundHandler: InboundMessageHandler | null = null;
   private readonly reconnectBaseDelayMs = Number(
     process.env.WHATSAPP_RECONNECT_BASE_DELAY_MS ?? 5000,
   );
@@ -63,6 +82,7 @@ export class WhatsappAdapter
   private socket: BaileysSocket | null = null;
   private reconnectAttempts = 0;
   private reconnectTimer: NodeJS.Timeout | null = null;
+  private readonly startedAt = Math.floor(Date.now() / 1000);
 
   constructor(private readonly providerState: ProviderStateService) {
     super();
@@ -179,12 +199,34 @@ export class WhatsappAdapter
     return { buffer, mimetype };
   }
 
-  getHealth(): { status: 'CONNECTED' | 'WAITING_QR'; latency: string } {
+  getChannelStatus(): ChannelStatus {
+    const raw = this.providerState.getSnapshot(this.providerName).status;
+    if (raw === 'WAITING_QR') return 'PENDING_AUTH';
+    return raw as ChannelStatus;
+  }
+
+  /** @deprecated Use getChannelStatus() */
+  getHealth(): { status: string; latency: string } {
     const snapshot = this.providerState.getSnapshot(this.providerName);
     return {
       status: snapshot.status,
       latency: snapshot.latencyMs === null ? 'n/a' : `${snapshot.latencyMs}ms`,
     };
+  }
+
+  override onInboundMessage(handler: InboundMessageHandler): void {
+    this.inboundHandler = handler;
+  }
+
+  private buildBaileysLogger(): unknown {
+    // Pino-compatible no-op logger — suppresses Baileys' internal noise
+    const noop = (): void => {};
+    const logger: Record<string, unknown> = {
+      level: 'silent',
+      trace: noop, debug: noop, info: noop, warn: noop, error: noop, fatal: noop,
+    };
+    logger.child = () => logger;
+    return logger;
   }
 
   private async bootstrapBaileys(): Promise<void> {
@@ -201,11 +243,16 @@ export class WhatsappAdapter
     await mkdir(authDir, { recursive: true });
 
     const { state, saveCreds } = await baileys.useMultiFileAuthState(authDir);
+    const { version } = await baileys.fetchLatestBaileysVersion();
+    this.logger.log(`Using Baileys WA version: ${version.join('.')}`);
     const socket = baileys.default({
       auth: state,
+      version,
       printQRInTerminal: false,
       browser: ['Ubuntu', 'Chrome', '20.0.04'],
-      version: [2, 3000, 1033893291],
+      logger: this.buildBaileysLogger(),
+      syncFullHistory: false,
+      getMessage: async () => ({ conversation: '' }),
     });
 
     socket.ev.on('connection.update', (update) => {
@@ -234,6 +281,48 @@ export class WhatsappAdapter
 
     socket.ev.on('creds.update', () => {
       void saveCreds();
+    });
+
+    socket.ev.on('messages.upsert', ({ messages, type }) => {
+      this.logger.log(`messages.upsert — type: ${type}, count: ${messages.length}, handlerSet: ${!!this.inboundHandler}`);
+      if (!this.inboundHandler) {
+        this.logger.warn('messages.upsert fired but inboundHandler is not registered yet');
+        return;
+      }
+      for (const raw of messages) {
+        const msgTs = typeof raw.messageTimestamp === 'number'
+          ? raw.messageTimestamp
+          : Number(raw.messageTimestamp ?? 0);
+        this.logger.log(
+          `  msg from=${raw.key.remoteJid} fromMe=${raw.key.fromMe} ts=${msgTs} (startedAt=${this.startedAt} diff=${msgTs - this.startedAt}s)`,
+        );
+        if (raw.key.fromMe) continue;
+        if (msgTs > 0 && msgTs < this.startedAt) continue;
+        const from = raw.key.remoteJid ?? '';
+        this.logger.log(`Inbound message from ${from}`);
+        const text =
+          (raw.message?.conversation as string | undefined) ??
+          (
+            raw.message?.extendedTextMessage as
+              | { text?: string }
+              | undefined
+          )?.text ??
+          null;
+
+        const msg: InboundMessage = {
+          id: randomUUID(),
+          channel: this.providerName,
+          from,
+          to: 'self',
+          text,
+          raw,
+          receivedAt: new Date(),
+        };
+
+        void this.inboundHandler(msg).catch((err: unknown) => {
+          this.logger.error(`Inbound handler error: ${String(err)}`);
+        });
+      }
     });
 
     this.socket = socket;
